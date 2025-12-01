@@ -1,0 +1,753 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>3DCP Literature Graph - References & Themes</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <!-- Vis Network (graph) -->
+  <script src="https://unpkg.com/vis-network@9.1.6/dist/vis-network.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/vis-network@9.1.6/styles/vis-network.min.css" />
+  <!-- Tabulator (reference table) -->
+  <link href="https://unpkg.com/tabulator-tables@5.5.2/dist/css/tabulator.min.css" rel="stylesheet">
+  <script src="https://unpkg.com/tabulator-tables@5.5.2/dist/js/tabulator.min.js"></script>
+  <!-- Simple style -->
+  <style>
+    :root { --bg:#0f172a; --fg:#e2e8f0; --muted:#94a3b8; --card:#111827; --accent:#38bdf8; }
+    html,body { margin:0; padding:0; background:var(--bg); color:var(--fg); font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+    header { padding:16px 20px; border-bottom:1px solid #1f2937; background:linear-gradient(180deg,#0f172a,#0b1224); }
+    h1 { margin:0 0 4px; font-size:20px; }
+    p.sub { margin:0; color:var(--muted); font-size:13px; }
+    .wrap { display:grid; grid-template-columns: 1.3fr 1fr; gap:14px; padding:14px; }
+    .card { background:var(--card); border:1px solid #1f2937; border-radius:12px; padding:12px; }
+    #graph { height:60vh; background:#0b1224; border-radius:8px; }
+    .toolbar { display:grid; grid-template-columns: repeat(6, minmax(160px,1fr)); gap:10px; margin-bottom:10px; }
+    .filters { display:grid; grid-template-columns: repeat(6, minmax(160px,1fr)); gap:10px; margin:10px 0 6px; }
+    input[type="search"], select { background:#0b1327; color:var(--fg); border:1px solid #1f2937; border-radius:8px; padding:8px 10px; width:100%; }
+    .range { background:#0b1327; border:1px solid #1f2937; border-radius:10px; padding:8px 10px; }
+    .range label { display:flex; justify-content:space-between; font-size:12px; color:#cbd5e1; margin-bottom:6px; }
+    .range input[type="range"] { width:100%; }
+    .legend { display:flex; gap:12px; flex-wrap:wrap; font-size:12px; color:#cbd5e1; margin:8px 0; }
+    .pill { padding:4px 8px; border-radius:999px; border:1px solid #1f2937; background:#0b1327; }
+    .pill.theme{ border-color:#334155; }
+    .pill.paper{ border-color:#374151; }
+    .pill.proposed { border-color:#b91c1c; background:#2a1212; }
+    .pill.control { border-color:#16a34a; background:#0f2416; }
+    .note { color:#94a3b8; font-size:12px; margin-top:6px; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    footer { padding:12px 16px; color:var(--muted); font-size:12px; border-top:1px solid #1f2937;}
+    #table { height:60vh; }
+    button { background:#0b1327; color:var(--fg); border:1px solid #1f2937; border-radius:8px; padding:8px 10px; cursor:pointer; }
+    button:hover { border-color:#334155; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>3D Concrete Printing - Interactive Literature Graph</h1>
+    <p class="sub">Click nodes to highlight; filter by theme/year/w/b/S/B/%FA/%Recycled/Strength; table is searchable & exportable.</p>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="toolbar">
+        <input id="q" type="search" placeholder="Search title/author/venue..." />
+        <select id="theme">
+          <option value="">Filter by theme</option>
+          <option>Rheology</option><option>Buildability</option><option>Interlayer bond</option>
+          <option>HVFA/SCM</option><option>CSA</option><option>Nanoclay</option><option>VMA</option>
+          <option>PCE/SP</option><option>Recycled aggregate</option><option>Eco/Organic</option>
+          <option>On-site printing</option><option>Review</option><option>Proposed mix</option><option>Control</option>
+        </select>
+        <select id="year">
+          <option value="">Year</option>
+          <option>2017</option><option>2018</option><option>2019</option><option>2020</option>
+          <option>2022</option><option>2023</option><option>2024</option><option>2025</option>
+        </select>
+        <button id="reset">Reset</button>
+        <button id="exportCSV">Export CSV</button>
+        <div></div>
+      </div>
+
+      <div class="filters">
+        <div class="range"><label><span>w/b min</span><span id="wbMinVal">0.25</span></label><input id="wbMin" type="range" min="0.25" max="0.50" step="0.01" value="0.25"></div>
+        <div class="range"><label><span>w/b max</span><span id="wbMaxVal">0.50</span></label><input id="wbMax" type="range" min="0.25" max="0.50" step="0.01" value="0.50"></div>
+        <div class="range"><label><span>S/B min</span><span id="sbMinVal">0.0</span></label><input id="sbMin" type="range" min="0" max="3" step="0.01" value="0"></div>
+        <div class="range"><label><span>S/B max</span><span id="sbMaxVal">3.0</span></label><input id="sbMax" type="range" min="0" max="3" step="0.01" value="3"></div>
+        <div class="range"><label><span>% FA min</span><span id="faMinVal">0</span></label><input id="faMin" type="range" min="0" max="80" step="1" value="0"></div>
+        <div class="range"><label><span>% FA max</span><span id="faMaxVal">80</span></label><input id="faMax" type="range" min="0" max="80" step="1" value="80"></div>
+        <div class="range"><label><span>% Recycled min</span><span id="recMinVal">0</span></label><input id="recMin" type="range" min="0" max="100" step="1" value="0"></div>
+        <div class="range"><label><span>% Recycled max</span><span id="recMaxVal">100</span></label><input id="recMax" type="range" min="0" max="100" step="1" value="100"></div>
+        <div class="range"><label><span>Strength min (MPa)</span><span id="fMinVal">0</span></label><input id="fMin" type="range" min="0" max="120" step="1" value="0"></div>
+        <div class="range"><label><span>Strength max (MPa)</span><span id="fMaxVal">120</span></label><input id="fMax" type="range" min="0" max="120" step="1" value="120"></div>
+        <div class="range"><label><span>Year min</span><span id="yMinVal">2017</span></label><input id="yMin" type="range" min="2017" max="2025" step="1" value="2017"></div>
+        <div class="range"><label><span>Year max</span><span id="yMaxVal">2025</span></label><input id="yMax" type="range" min="2017" max="2025" step="1" value="2025"></div>
+      </div>
+
+      <div class="legend">
+        <span class="pill paper">Paper (blue)</span>
+        <span class="pill theme">Theme (purple diamond)</span>
+        <span class="pill proposed">Proposed (red)</span>
+        <span class="pill control">Control (green)</span>
+      </div>
+      <div id="graph"></div>
+      <div class="note">Tip: drag to pan, scroll to zoom, click a node to highlight connected items.</div>
+    </div>
+
+    <div class="card">
+      <div id="table"></div>
+    </div>
+  </div>
+
+  <footer>
+    Built for <a href="https://cxl.so/litgraph/" target="_blank" rel="noopener">litgraph-style</a> exploration. Data embedded - edit in-place to add papers or themes.
+  </footer>
+
+  <script>
+  // ======== DATA ========
+  // Papers with added fields: binder, activator, aggregate, sp, vma, other additives, rheology metrics, buildability, printer details
+  const PAPERS = [
+    {id:'P1', year:2018, type:'paper', mix:1,
+      title:'High-Volume Fly-Ash (HVFA) Mortar with Nano-Attapulgite Clay',
+      authors:'Panda B. et al.', venue:'Composites Part B',
+      doi:'10.1016/j.compositesb.2018.11.109', url:'https://doi.org/10.1016/j.compositesb.2018.11.109',
+      tags:['Buildability','Interlayer bond','HVFA/SCM','PCE/SP','Nanoclay'],
+      wb:0.40, sb:3.00, fa:70, recycled:0, strength28:31.3,
+      binder:'70% Fly Ash + 30% OPC',
+      activator:'3% Na2SO4 (by binder mass)',
+      aggregate:'River sand <= 2 mm (S/B = 3:1)',
+      sp:'PCE ~0.5% bwob (brand not specified)',
+      vma:'Nano-attapulgite clay 0.1-0.5% bwob',
+      other:'',
+      yieldStress:'~3 kPa (higher than control <2 kPa)',
+      viscosity:'<10 Pa-s',
+      thixotropy:'1.74-2.54 Pa/s',
+      buildability:'20 layers without buckling (~0.4 m height)',
+      printer:'4-axis gantry; 30x15 mm nozzle; screw pump feed',
+      path:'Straight wall (~0.4 m, 20 layers)',
+      extrusion:'4-axis gantry with screw-pump feed, 30x15 mm nozzle',
+      layering:'h ~15-20 mm / v ~40 mm/s',
+      objective:'Validate low-cost HVFA mix; relate rheology to buildability; optimize yield stress window'
+    },
+    {id:'P2', year:2019, type:'paper', mix:2,
+      title:'3D Printable Concrete: Mixture Design and Test Methods',
+      authors:'Rahul A.V. et al.', venue:'Cement and Concrete Composites',
+      doi:'10.1016/j.cemconcomp.2018.12.014', url:'https://doi.org/10.1016/j.cemconcomp.2018.12.014',
+      tags:['Rheology','PCE/SP','VMA','Buildability'],
+      wb:0.36, sb:1.49, fa:20, recycled:0, strength28:37.5,
+      binder:'80% OPC + 20% Fly Ash (Class F)',
+      activator:'None reported',
+      aggregate:'Quartz powder 40% (<=75 um) + sand 0-1 mm 30% + sand 1-2 mm 30% (1:1.49)',
+      sp:'PCE HRWR (MasterGlenium ACE 30/51) 0.18% bwob',
+      vma:'Methyl cellulose (VMA) 0.10% bwob',
+      other:'PP fibres 0.06% vol',
+      yieldStress:'~2 kPa (initial)',
+      viscosity:'5-7 Pa-s',
+      thixotropy:'1.3-1.8 Pa/s',
+      buildability:'12-14 layers (~0.30 m)',
+      printer:'Custom Tvasta gantry; 30 mm nozzle; 40 mm/s; 10-15 mm layers',
+      path:'Linear wall segments',
+      extrusion:'Screw-pump extrusion (20 mm nozzle)',
+      layering:'h ~20 mm / v ~35 mm/s',
+      objective:'Tune flowability and pumpability with PCE + VMA; define rheology criteria'
+    },
+    {id:'P3', year:2020, type:'paper', mix:3,
+      title:'Cement-Silica Fume Paste for Rheological Characterization',
+      authors:'Manikandan R. et al.', venue:'Manufacturing Letters 24:33-37',
+      doi:'10.1016/j.mfglet.2020.03.002', url:'https://doi.org/10.1016/j.mfglet.2020.03.002',
+      tags:['Rheology','PCE/SP'],
+      wb:0.30, sb:0, fa:0, recycled:0, strength28:42,
+      binder:'100% OPC (Type II) + Silica Fume (0-5%)',
+      activator:'None reported',
+      aggregate:'None (paste mix for rheology and stacking tests)',
+      sp:'PCE-based HRWR 1.5-2.5% bwob',
+      vma:'None reported',
+      other:'',
+      yieldStress:'~1.0-2.8 kPa; optimum ~2.5 kPa with 5% SF + 2.5% SP',
+      viscosity:'~10-12 Pa-s at printable regime',
+      thixotropy:'Moderate to high recovery with SF + SP',
+      buildability:'Printable bead height 15-20 mm; strong stacking',
+      printer:'Bench-top plunger extruder; ~25 mm nozzle; ~20 mm/s; 15 mm layers',
+      path:'Short extrusion strips for rheometer tests',
+      extrusion:'Bench-top plunger extruder (piston-type)',
+      layering:'h ~10 mm / v ~10 mm/s',
+      objective:'Map yield-stress recovery; find optimum SP (2.5%) + SF (5%) for stacking'
+    },
+    {id:'P4', year:2017, type:'paper', mix:4,
+      title:'Use of Calcium Sulfoaluminate Cements for Setting Control of 3D-Printing Mortars',
+      authors:'Khalil N.; Aouad G.; El Cheikh K.; Remond S.',
+      venue:'Construction and Building Materials',
+      doi:'10.1016/j.conbuildmat.2017.09.109', url:'https://doi.org/10.1016/j.conbuildmat.2017.09.109',
+      tags:['CSA','Buildability'],
+      wb:0.35, sb:2.00, fa:0, recycled:0, strength28:79,
+      binder:'93% OPC (CEM I 52.5 N-SR3) + 7% CSA (Alpenat Vicat)',
+      activator:'None reported',
+      aggregate:'Calcareous crushed sand 0-2 mm (~19% <63 um); cement:sand = 1:2',
+      sp:'Sika Viscocrete Tempo 11 (PCE HRWR) 0.26% bwob',
+      vma:'None reported',
+      other:'',
+      yieldStress:'Thixotropy jump: 2.7 -> 95.5 kPa within 10-30 min',
+      viscosity:'High; strong shear-thinning from CSA reaction',
+      thixotropy:'Build-up ~9 kPa/min in first 20 min',
+      buildability:'~30 layers x 0.5 cm (~15 cm) without buckling',
+      printer:'Manual plunger caulking gun; 10 mm nozzle; ~5 mm layers; ~5 mm/s',
+      path:'Small wall strips (~15 cm height)',
+      extrusion:'Manual caulking-gun extruder, 10 mm nozzle',
+      layering:'h ~5 mm / v ~5 mm/s',
+      objective:'Use 7% CSA for rapid stiffening and buildability'
+    },
+    {id:'P5', year:2019, type:'paper', mix:5,
+      title:'Effect of Fresh Properties & Process on Buildability and Interlayer Adhesion (HVFA + Nanoclay)',
+      authors:'Panda B.; Paul S.C.; Mohamed N.A.N.; Tay Y.W.D.; Tan M.J.',
+      venue:'Materials 12(13):2149',
+      doi:'10.3390/ma12132149', url:'https://doi.org/10.3390/ma12132149',
+      tags:['Interlayer bond','HVFA/SCM','Nanoclay','PCE/SP'],
+      wb:0.35, sb:1.22, fa:67.5, recycled:0, strength28:31.3,
+      binder:'30% OPC (CEM I) + 67.5% Class F FA + 2.5% silica fume',
+      activator:'3% Na2SO4 (by binder mass)',
+      aggregate:'River sand <= 2 mm; sand:binder = 55:45 (S/B ~1.22:1)',
+      sp:'PCE HRWR ~0.7% bwob (MasterGlenium 51 / ViscoCrete-20HE / Dynamon SR)',
+      vma:'Nanoclay (Acti-Gel attapulgite) 0.5% bwob',
+      other:'',
+      yieldStress:'~3 kPa (higher than control <2 kPa)',
+      viscosity:'<10 Pa-s',
+      thixotropy:'1.74-2.54 Pa/s',
+      buildability:'~20 layers without buckling (~0.4 m height)',
+      printer:'4-axis gantry; 30x15 mm slot nozzle; screw pump feed',
+      path:'Rectilinear wall (400 x 200 mm, 20 layers)',
+      extrusion:'1 m3 gantry with screw-pump feed, 30 mm nozzle',
+      layering:'h ~20 mm / v ~20 mm/s',
+      objective:'Study interlayer bond (~1.6 MPa) vs fresh rheology; validate Na2SO4-activated HVFA mix'
+    },
+    {id:'P6', year:2023, type:'paper', mix:6,
+      title:'Extrusion & Structural Build-Up with Fly Ash, Nanoclays and VMAs',
+      authors:'Varela-Barluenga A.; Perrot A.',
+      venue:'Cement and Concrete Composites 142:105217',
+      doi:'10.1016/j.cemconcomp.2023.105217', url:'https://doi.org/10.1016/j.cemconcomp.2023.105217',
+      tags:['Rheology','Nanoclay','VMA','PCE/SP','Buildability'],
+      wb:0.27, sb:0, fa:25, recycled:0, strength28:40,
+      binder:'75% CEM I 52.5 R + 25% Fly Ash',
+      activator:'None reported',
+      aggregate:'None (paste mix for rheology and stacking tests)',
+      sp:'5% bwoc PCE-based HRWRA',
+      vma:'VMA2 0.5% bwoc + Sepiolite 2% bwoc',
+      other:'',
+      yieldStress:'~6-7 kPa (static rebuild curve)',
+      viscosity:'~20 Pa-s',
+      thixotropy:'Moderate build-up under rest',
+      buildability:'Cohesive extrusion; 20+ layers printable; ~100 N peak force at 10 mm/s feed',
+      printer:'Laboratory ram extruder (ENISE); 30 mm circular nozzle; 10 mm layer height; ~10 mm/s print speed',
+      path:'Continuous filament (ram extrusion)',
+      extrusion:'Ram-extruder with 20 mm die',
+      layering:'h ~10 mm / v ~5-10 mm/s',
+      objective:'Quantify extrusion force and build-up; assess VMA2 + sepiolite effects on cohesion'
+    },
+    {id:'P7', year:2019, type:'paper', mix:7,
+      title:'Studying the Printability for Formwork-Free Onsite 3D Printing (CONPrint3D)',
+      authors:'Nerella V.N.; Mechtcherine V.', venue:'Book chapter',
+      doi:'10.1016/B978-0-12-815481-6.00016-6', url:'https://doi.org/10.1016/B978-0-12-815481-6.00016-6',
+      tags:['On-site printing','Buildability','Rheology'],
+      wb:0.30, sb:2.07, fa:40, recycled:0, strength28:90,
+      binder:'CEM I 52.5 R 430 kg/m3 (60%) + Fly Ash 170 kg/m3 (40%) + Microsilica ~90 kg solids',
+      activator:'None reported',
+      aggregate:'Multi-graded fine sand 1240 kg/m3: 0.06-0.2 mm 430 kg; 0-1 mm 380 kg; 0-2 mm 430 kg',
+      sp:'MCP F 5100 (PCE) 1.6% bwob',
+      vma:'None reported',
+      other:'Microsilica (~15% bwob) for cohesion and finish',
+      yieldStress:'~4-6 kPa (optimized for stability)',
+      viscosity:'~15-20 Pa-s',
+      thixotropy:'Moderate-high; supports rapid layer build-up',
+      buildability:'High build height (>0.5 m, 20+ layers); stable smooth layers',
+      printer:'CONPrint3D onsite gantry/boom-pump; 25-35 mm nozzle; ~75 mm/s; open time ~90 min',
+      path:'Full-scale linear wall (formwork-free)',
+      extrusion:'Truck-mounted boom pump with controlled nozzle (~3 m3/h)',
+      layering:'h ~25 mm / v ~75 mm/s',
+      objective:'Demonstrate on-site printing without formwork; reach C80/95 strength at high speed'
+    },
+    {id:'P8', year:2020, type:'paper', mix:8,
+      title:'Hardened Properties of Layered 3D-Printed Concrete with Recycled Sand (M3 Optimum)',
+      authors:'Ding T.; Xiao J.; Zou S.; Wang Y.',
+      venue:'Cement and Concrete Composites 113:103724',
+      doi:'10.1016/j.cemconcomp.2020.103724', url:'https://doi.org/10.1016/j.cemconcomp.2020.103724',
+      tags:['Recycled aggregate','VMA','PCE/SP','Buildability','Interlayer bond'],
+      wb:0.37, sb:1.00, fa:0, recycled:25, strength28:39,
+      binder:'OPC (100%)',
+      activator:'None reported',
+      aggregate:'Sand = 1.0 x cement; natural:recycled sand = 75:25 (<=2 mm)',
+      sp:'PCE ~0.125% bwoc',
+      vma:'HPMC ~0.128% bwoc',
+      other:'',
+      yieldStress:'',
+      viscosity:'',
+      thixotropy:'',
+      buildability:'15-20 layers (~0.35-0.40 m); interlayer bond ~1.6 MPa',
+      printer:'3-axis gantry; ~30 mm nozzle; smooth extrusion; progressive-cavity pump',
+      path:'Straight wall (15-20 layers, ~0.4 m)',
+      extrusion:'3-axis gantry with progressive-cavity pump, 30 mm nozzle',
+      layering:'h ~20 mm / v ~30 mm/s',
+      objective:'Assess 25% recycled sand replacement on strength and interlayer bond; best printability mix (M3)'
+    },
+    {id:'P9', year:2025, type:'paper', mix:9,
+      title:'Optimization of SP and w/b for 3D Printable Concrete with Marble Powder Waste',
+      authors:'Janani; Santhi', venue:'Conference',
+      doi:'10.12913/22998624/202853', url:'https://doi.org/10.12913/22998624/202853',
+      tags:['Rheology','Buildability'],
+      wb:0.35, sb:1.20, fa:0, recycled:0, strength28:64.1,
+      binder:'OPC 53 Grade + 10% Marble Powder Waste (cement replacement)',
+      activator:'None reported',
+      aggregate:'Manufactured sand <=1.18 mm; binder:sand = 1:1.2',
+      sp:'PCE 0.35% bwob',
+      vma:'None reported',
+      other:'',
+      yieldStress:'Not quantified; tuned for smooth extrusion and stability',
+      viscosity:'Flow ~21 cm (ASTM C1437) targeted for printability',
+      thixotropy:'Stable build (~9 layers, 135 mm height); no segregation observed',
+      buildability:'Layer stability through 9 layers (~135 mm)',
+      printer:'Tvasta Nirmaan R&D gantry; 30 mm nozzle; 50 mm/s; 15 mm layers; 60x135 mm wall (9 layers)',
+      path:'Rectangular panels (~40 x 40 cm)',
+      extrusion:'Gantry extruder with screw feed',
+      layering:'h ~15-20 mm / v ~25 mm/s',
+      objective:'Optimize cement-sand ratio and rheology for local materials; compare slump vs extrusion flow'
+    },
+    {id:'P10', year:2025, type:'paper', mix:10,
+      title:'Printable Concrete with Construction and Demolition Waste Aggregates',
+      authors:'Tudela M. et al.', venue:'Conference chapter',
+      doi:'10.1007/978-3-031-70031-6_1', url:'https://doi.org/10.1007/978-3-031-70031-6_1',
+      tags:['Recycled aggregate','PCE/SP','Buildability'],
+      wb:0.37, sb:1.30, fa:0, recycled:100, strength28:21,
+      binder:'OPC Type I + 10% silica fume (~84 kg/m3)',
+      activator:'None reported',
+      aggregate:'100% construction and demolition waste fine aggregate <=2 mm; S/B ~1.3:1',
+      sp:'PCE (ASTM C494 Type F) 1.33% bwob',
+      vma:'None reported',
+      other:'Polypropylene fibres 1 kg/m3 (12-19 mm, ~0.05 mm dia)',
+      yieldStress:'~1.1 kPa (about 1.09x control NFAC)',
+      viscosity:'~9-10 Pa-s (+54% vs NFAC)',
+      thixotropy:'Moderate build-up; ~25.6% workability loss after 30 min',
+      buildability:'Smooth filaments; stable wall ~0.4 m with no buckling',
+      printer:'Colibri 3D (PUCP); 25.4 mm nozzle; 20 mm layers; 20 mm/s',
+      path:'Rectilinear wall 400 x 200 mm (~20 layers)',
+      extrusion:'Colibri 3D screw-pump to 25.4 mm nozzle',
+      layering:'Layer height 20 mm; print speed 20 mm/s',
+      objective:'Evaluate 100% CDW fine aggregate replacement; relate rheology to mechanical response'
+    },
+    {id:'P11', year:2024, type:'paper', mix:11,
+      title:'Eco-Friendly 3D-Printed Concrete with Waste & Organic Artificial Aggregates',
+      authors:'Butkute K.; Vaitkevicius V.; Adomaityte F.',
+      venue:'Materials 17:3290',
+      doi:'10.3390/ma17133290', url:'https://doi.org/10.3390/ma17133290',
+      tags:['Eco/Organic','HVFA/SCM','Buildability'],
+      wb:0.35, sb:null, fa:9, recycled:0, strength28:32,
+      binder:'OPC (CEM I 42.5 R) 30% + Hydrated Lime 2% + Burnt Oil Shale Fly Ash 9%',
+      activator:'None reported',
+      aggregate:'Natural sand 0-2 mm (41-55% mass) + artificial aggregates from bottom slag, hemp shives, charcoal',
+      sp:'Peramin (sulfonated melamine) ~0.5% bwob',
+      vma:'Vinnapas hydrophobic polymer (adhesion aid)',
+      other:'Calcium formate accelerator; Denka expansion agent; PP fibres for crack control',
+      yieldStress:'Target density ~1900 kg/m3; high cohesion from artificial aggregates',
+      viscosity:'',
+      thixotropy:'',
+      buildability:'15-20 layers (~0.35-0.40 m)',
+      printer:'Custom 3-axis gantry (400 x 400 x 400 mm); 25 mm nozzle; 15-20 mm layers; 20 mm/s',
+      path:'Wall sections (~0.4 m, 15-20 layers)',
+      extrusion:'Custom gantry with peristaltic/screw hybrid extruder, 25 mm nozzle',
+      layering:'h ~15-20 mm / v ~20 mm/s',
+      objective:'Develop organic and waste-aggregate 3DPC using artificial aggregates from bottom slag + hemp shives + charcoal'
+    },
+
+    // Proposed & Control
+    {id:'PX1', year:2025, type:'paper', mix:'Proposed',
+      title:'Proposed Date-Pit Ash Mix (from concrete + fly-ash precedent)',
+      authors:'Alfaisal', venue:'Proposal',
+      doi:'', url:'',
+      tags:['Eco/Organic','HVFA/SCM','Recycled aggregate','Buildability','Proposed mix'],
+      wb:0.40, sb:1.00, fa:10, recycled:0, strength28:null,
+      binder:'OPC 35% + FA 10% + Date Pit Ash 5% (<=500 um, filler or SCM)',
+      activator:'None reported',
+      aggregate:'River sand <= 2 mm; S/B = 1:1',
+      sp:'PCE (Glenium 51 type) 0.5% bwob',
+      vma:'Nano-attapulgite clay 0.5% bwob (for buildability)',
+      other:'',
+      yieldStress:'Target ~3 kPa for extrusion stability',
+      viscosity:'<10 Pa-s (target)',
+      thixotropy:'Expected 1.7-2.3 Pa/s window',
+      buildability:'Target >=0.35-0.40 m height without buckling',
+      printer:'Luyten Platypus-class gantry; 40 mm round nozzle; 40 mm/s; 18 mm layers (~45 mm bead)',
+      path:'',
+      extrusion:'',
+      layering:'',
+      objective:'Proposal based on concrete precedent with fly ash and date-pit ash'
+    },
+    {id:'PX2', year:2025, type:'paper', mix:'Control',
+      title:'Control - Vendor-Provided Mix',
+      authors:'Vendor', venue:'Control',
+      doi:'', url:'',
+      tags:['Buildability','Control'],
+      wb:0.40, sb:1.00, fa:0, recycled:0, strength28:null,
+      binder:'OPC 100%',
+      activator:'None reported',
+      aggregate:'River sand (1:1)',
+      sp:'A1 (0.10%)',
+      vma:'A2 (0.05%)',
+      other:'',
+      yieldStress:'Target >=0.40-0.50 m height without buckling',
+      viscosity:'',
+      thixotropy:'',
+      buildability:'Vendor control mix for benchmark printing',
+      printer:'Luyten Platypus-class gantry; 40 mm round nozzle; 40 mm/s; 18 mm layers (~45 mm bead)',
+      path:'',
+      extrusion:'',
+      layering:'',
+      objective:'Vendor reference mix to benchmark proposal'
+    },
+
+    // Reviews / methods
+    {id:'PR1', year:2022, type:'paper', mix:null,
+      title:'Rheometry for Concrete 3D Printing: Review & Experiments',
+      authors:'Jayathilakage R.; Rajeev P.; Sanjayan J.', venue:'Buildings 12:1190',
+      doi:'10.3390/buildings12081190', url:'https://doi.org/10.3390/buildings12081190',
+      tags:['Rheology','Review'],
+      wb:null, sb:null, fa:null, recycled:null, strength28:null,
+      binder:'-', activator:'-', aggregate:'-', sp:'-', vma:'-',
+      other:'', yieldStress:'', viscosity:'', thixotropy:'', buildability:'',
+      printer:'', path:'', extrusion:'', layering:'', objective:''
+    },
+    {id:'PR2', year:2024, type:'paper', mix:null,
+      title:'Fresh & Rheological Properties of 3D-Printable Cementitious Composites: A Review',
+      authors:'Rahman M.; Rawat S.; Yang R.C.; Mahil A.; Zhang Y.X.', venue:'Journal of Building Engineering 91:109719',
+      doi:'10.1016/j.jobe.2024.109719', url:'https://doi.org/10.1016/j.jobe.2024.109719',
+      tags:['Rheology','Review'],
+      wb:null, sb:null, fa:null, recycled:null, strength28:null,
+      binder:'-', activator:'-', aggregate:'-', sp:'-', vma:'-',
+      other:'', yieldStress:'', viscosity:'', thixotropy:'', buildability:'',
+      printer:'', path:'', extrusion:'', layering:'', objective:''
+    },
+    {id:'PR3', year:2022, type:'paper', mix:null,
+      title:'Large-Scale Automated Additive Construction: A Review on Sustainability',
+      authors:'Khosravani M.R.; Haghighi A.', venue:'Sustainability 14(15):9782',
+      doi:'10.3390/su14159782', url:'https://doi.org/10.3390/su14159782',
+      tags:['On-site printing','Eco/Organic','Review'],
+      wb:null, sb:null, fa:null, recycled:null, strength28:null,
+      binder:'-', activator:'-', aggregate:'-', sp:'-', vma:'-',
+      other:'', yieldStress:'', viscosity:'', thixotropy:'', buildability:'',
+      printer:'', path:'', extrusion:'', layering:'', objective:''
+    }
+  ];
+
+  // Themes as nodes (diamonds)
+  const THEMES = [
+    {id:'T_Rheology', label:'Rheology'},
+    {id:'T_Buildability', label:'Buildability'},
+    {id:'T_Bond', label:'Interlayer bond'},
+    {id:'T_HVFA', label:'HVFA/SCM'},
+    {id:'T_CSA', label:'CSA'},
+    {id:'T_NC', label:'Nanoclay'},
+    {id:'T_VMA', label:'VMA'},
+    {id:'T_PCE', label:'PCE/SP'},
+    {id:'T_Recycled', label:'Recycled aggregate'},
+    {id:'T_Eco', label:'Eco/Organic'},
+    {id:'T_Onsite', label:'On-site printing'},
+    {id:'T_Review', label:'Review'},
+    {id:'T_Proposed', label:'Proposed mix'},
+    {id:'T_Control', label:'Control'}
+  ];
+
+  function tag2theme(tag){
+    const map = {
+      'Rheology':'T_Rheology','Buildability':'T_Buildability','Interlayer bond':'T_Bond',
+      'HVFA/SCM':'T_HVFA','CSA':'T_CSA','Nanoclay':'T_NC','VMA':'T_VMA','PCE/SP':'T_PCE',
+      'Recycled aggregate':'T_Recycled','Eco/Organic':'T_Eco','On-site printing':'T_Onsite',
+      'Review':'T_Review','Proposed mix':'T_Proposed','Control':'T_Control'
+    };
+    return map[tag] || null;
+  }
+
+  const COLORS = {
+    paper:{ base:'#38bdf8', focus:'#67e8f9', dim:'#0ea5e9' },
+    theme:{ base:'#a78bfa', focus:'#c4b5fd', dim:'#6d28d9' },
+    edges:{ base:'#4b5563', dim:'#334155', focus:'#94a3b8' },
+    proposed:{
+      base:{border:'#ef4444', background:'#fca5a5'},
+      focus:{border:'#ef4444', background:'#fecdd3'},
+      dim:{border:'#b91c1c', background:'#f87171'}
+    },
+    control:{
+      base:{border:'#22c55e', background:'#86efac'},
+      focus:{border:'#22c55e', background:'#bbf7d0'},
+      dim:{border:'#15803d', background:'#4ade80'}
+    }
+  };
+
+  const mixLabel = paper => paper.mix ? (typeof paper.mix === 'number' ? `Mix ${paper.mix}: ` : `${paper.mix}: `) : '';
+  const paperColor = (paper, state='base')=>{
+    if(!paper) return COLORS.paper[state] || COLORS.paper.base;
+    const tags = paper.tags || [];
+    if(tags.includes('Proposed mix')) return COLORS.proposed[state] || COLORS.proposed.base;
+    if(tags.includes('Control')) return COLORS.control[state] || COLORS.control.base;
+    return COLORS.paper[state] || COLORS.paper.base;
+  };
+
+  // ======== GRAPH ========
+  const nodes = new vis.DataSet([
+    // Paper nodes
+    ...PAPERS.map(p => ({
+      id: p.id,
+      label: mixLabel(p) + p.title,
+      shape: 'dot',
+      size: 10,
+      color: paperColor(p, 'base'),
+      title: `<b>${p.title}</b><br>${p.authors}<br><i>${p.venue||''}</i><br>${p.year}${p.doi?('<br>DOI: '+p.doi):''}${p.url?('<br><a href="'+p.url+'" target="_blank">Open</a>'):''}`
+    })),
+    // Theme nodes
+    ...THEMES.map(t => ({
+      id: t.id,
+      label: t.label,
+      shape: 'diamond',
+      size: 16,
+      color: COLORS.theme.base,
+      font: { color:'#fff' }
+    }))
+  ]);
+
+  const edges = new vis.DataSet(
+    PAPERS.flatMap(p => (p.tags||[])
+      .map(tag => tag2theme(tag))
+      .filter(Boolean)
+      .map(tid => ({ from:p.id, to:tid, color:{color:COLORS.edges.base} })))
+  );
+
+  const container = document.getElementById('graph');
+  const network = new vis.Network(container, {nodes, edges}, {
+    interaction: { hover:true, navigationButtons:true, keyboard:true },
+    physics: { solver:'forceAtlas2Based', stabilization:{iterations:150}, forceAtlas2Based:{gravitationalConstant:-50} },
+    edges: { smooth:true }
+  });
+
+  // Highlight on click
+  network.on('click', params=>{
+    const selected = params.nodes[0];
+    if(!selected) {
+      nodes.get().forEach(n=>{
+        const paper = PAPERS.find(p=>p.id===n.id);
+        const color = n.shape==='diamond' ? COLORS.theme.base : paperColor(paper,'base');
+        nodes.update({id:n.id,color});
+      });
+      edges.get().forEach(e=>edges.update({id:e.id, color:{color:COLORS.edges.base}}));
+      return;
+    }
+    const connected = network.getConnectedNodes(selected);
+    nodes.get().forEach(n=>{
+      const isFocus = (n.id===selected) || connected.includes(n.id);
+      const paper = PAPERS.find(p=>p.id===n.id);
+      const color = n.shape==='diamond'
+        ? (isFocus ? COLORS.theme.focus : COLORS.theme.dim)
+        : paperColor(paper, isFocus ? 'focus' : 'dim');
+      nodes.update({id:n.id, color});
+    });
+    edges.get().forEach(e=>{
+      const onPath = (e.from===selected || e.to===selected || (connected.includes(e.from) && connected.includes(e.to)));
+      edges.update({id:e.id, color:{color: onPath ? COLORS.edges.focus : COLORS.edges.dim}});
+    });
+  });
+
+  // ======== TABLE ========
+  const tableData = PAPERS.map(p=>({
+    mix: p.mix ? (typeof p.mix === 'number' ? `Mix ${p.mix}` : p.mix) : '-',
+    year: p.year, title: p.title, authors: p.authors, venue: p.venue,
+    doi: p.doi, url: p.url, themes: (p.tags||[]).join(', '),
+    wb:p.wb, sb:p.sb, fa:p.fa, recycled:p.recycled, strength:p.strength28,
+    binder:p.binder, activator:p.activator, aggregate:p.aggregate, sp:p.sp, vma:p.vma,
+    other:p.other, yieldStress:p.yieldStress, viscosity:p.viscosity, thixotropy:p.thixotropy,
+    buildability:p.buildability, printer:p.printer, path:p.path, extrusion:p.extrusion,
+    layering:p.layering, objective:p.objective
+  }));
+
+  const table = new Tabulator("#table", {
+    data: tableData,
+    layout: "fitColumns",
+    reactiveData: true,
+    height: "60vh",
+    columns: [
+      {title:"Mix", field:"mix", width:130, headerFilter:true},
+      {title:"Year", field:"year", sorter:"number", width:80, headerFilter:true},
+      {title:"Title", field:"title", headerFilter:true, formatter:(cell)=> {
+        const row = cell.getRow().getData();
+        return row.url ? `<a href="${row.url}" target="_blank">${cell.getValue()}</a>` : cell.getValue();
+      }},
+      {title:"Authors", field:"authors", headerFilter:true},
+      {title:"Venue", field:"venue", headerFilter:true},
+      {title:"DOI", field:"doi", headerFilter:true, formatter:(cell)=>{
+        const v = cell.getValue(); if(!v) return '';
+        return `<a href="https://doi.org/${v}" target="_blank">${v}</a>`;
+      }},
+      {title:"Binder", field:"binder", headerFilter:true, width:220},
+      {title:"Activator", field:"activator", headerFilter:true, width:150},
+      {title:"Aggregate", field:"aggregate", headerFilter:true, width:240},
+      {title:"Superplasticiser", field:"sp", headerFilter:true, width:220},
+      {title:"Rheology modifier", field:"vma", headerFilter:true, width:220},
+      {title:"Other additives", field:"other", headerFilter:true, width:200},
+      {title:"Yield stress", field:"yieldStress", headerFilter:true, width:160},
+      {title:"Apparent viscosity", field:"viscosity", headerFilter:true, width:160},
+      {title:"Thixotropy", field:"thixotropy", headerFilter:true, width:150},
+      {title:"Buildability", field:"buildability", headerFilter:true, width:220},
+      {title:"Printer setup", field:"printer", headerFilter:true, width:240},
+      {title:"Printing path / geometry", field:"path", headerFilter:true, width:220},
+      {title:"Extrusion system", field:"extrusion", headerFilter:true, width:200},
+      {title:"Layer height / speed", field:"layering", headerFilter:true, width:180},
+      {title:"Objective / focus", field:"objective", headerFilter:true, width:260},
+      {title:"w/b", field:"wb", sorter:"number", width:80},
+      {title:"S/B", field:"sb", sorter:"number", width:80},
+      {title:"%FA", field:"fa", sorter:"number", width:80},
+      {title:"%Recycled", field:"recycled", sorter:"number", width:110},
+      {title:"f'c 28d (MPa)", field:"strength", sorter:"number", width:120}
+    ]
+  });
+
+  // ======== FILTERS ========
+  const $q = document.getElementById('q');
+  const $theme = document.getElementById('theme');
+  const $year = document.getElementById('year');
+  const $reset = document.getElementById('reset');
+  const $exportCSV = document.getElementById('exportCSV');
+
+  const sliders = {
+    wbMin:  document.getElementById('wbMin'),  wbMinVal:  document.getElementById('wbMinVal'),
+    wbMax:  document.getElementById('wbMax'),  wbMaxVal:  document.getElementById('wbMaxVal'),
+    sbMin:  document.getElementById('sbMin'),  sbMinVal:  document.getElementById('sbMinVal'),
+    sbMax:  document.getElementById('sbMax'),  sbMaxVal:  document.getElementById('sbMaxVal'),
+    faMin:  document.getElementById('faMin'),  faMinVal:  document.getElementById('faMinVal'),
+    faMax:  document.getElementById('faMax'),  faMaxVal:  document.getElementById('faMaxVal'),
+    recMin: document.getElementById('recMin'), recMinVal: document.getElementById('recMinVal'),
+    recMax: document.getElementById('recMax'), recMaxVal: document.getElementById('recMaxVal'),
+    fMin:   document.getElementById('fMin'),   fMinVal:   document.getElementById('fMinVal'),
+    fMax:   document.getElementById('fMax'),   fMaxVal:   document.getElementById('fMaxVal'),
+    yMin:   document.getElementById('yMin'),   yMinVal:   document.getElementById('yMinVal'),
+    yMax:   document.getElementById('yMax'),   yMaxVal:   document.getElementById('yMaxVal'),
+  };
+
+  Object.keys(sliders).forEach(k=>{
+    if(k.endsWith('Val')) return;
+    sliders[k].addEventListener('input', ()=>{
+      const labelKey = k+'Val';
+      sliders[labelKey].textContent = sliders[k].value;
+      applyFilters();
+    });
+  });
+
+  function inRange(val, min, max){
+    if(val===null || val===undefined) return true; // treat missing as pass-through
+    return val>=min && val<=max;
+  }
+
+  function applyFilters(){
+    const q = $q.value.trim().toLowerCase();
+    const th = $theme.value;
+    const yrSel = $year.value ? parseInt($year.value,10) : null;
+
+    // Slider ranges
+    const r = {
+      wb:[parseFloat(sliders.wbMin.value), parseFloat(sliders.wbMax.value)],
+      sb:[parseFloat(sliders.sbMin.value), parseFloat(sliders.sbMax.value)],
+      fa:[parseInt(sliders.faMin.value,10), parseInt(sliders.faMax.value,10)],
+      rec:[parseInt(sliders.recMin.value,10), parseInt(sliders.recMax.value,10)],
+      f:[parseInt(sliders.fMin.value,10), parseInt(sliders.fMax.value,10)],
+      y:[parseInt(sliders.yMin.value,10), parseInt(sliders.yMax.value,10)]
+    };
+
+    // Filtered paper ids
+    const visiblePapers = PAPERS.filter(p=>{
+      const okQ = !q || (p.title.toLowerCase().includes(q) || (p.authors||'').toLowerCase().includes(q) || (p.venue||'').toLowerCase().includes(q));
+      const okT = !th || (p.tags||[]).includes(th);
+      const okYsel = !yrSel || p.year===yrSel;
+      const okYr = inRange(p.year, r.y[0], r.y[1]);
+      const okWB = inRange(p.wb, r.wb[0], r.wb[1]);
+      const okSB = inRange(p.sb, r.sb[0], r.sb[1]);
+      const okFA = inRange(p.fa, r.fa[0], r.fa[1]);
+      const okRC = inRange(p.recycled, r.rec[0], r.rec[1]);
+      const okF  = inRange(p.strength28, r.f[0], r.f[1]);
+      return okQ && okT && okYsel && okYr && okWB && okSB && okFA && okRC && okF;
+    }).map(p=>p.id);
+
+    // Visible themes
+    const visibleThemes = new Set();
+    visiblePapers.forEach(pid=>{
+      const paper = PAPERS.find(pp=>pp.id===pid);
+      (paper.tags||[]).forEach(t=>{ const tid = tag2theme(t); if(tid) visibleThemes.add(tid); });
+    });
+
+    // Rebuild datasets
+    nodes.clear(); edges.clear();
+    nodes.add([
+      ...PAPERS.filter(p=>visiblePapers.includes(p.id)).map(p=>{
+        return {
+          id:p.id, label:mixLabel(p)+p.title, shape:'dot', size:10, color:paperColor(p,'base'),
+          title:`<b>${p.title}</b><br>${p.authors}<br><i>${p.venue||''}</i><br>${p.year}${p.doi?('<br>DOI: '+p.doi):''}${p.url?('<br><a href="${p.url}" target="_blank">Open</a>'):''}`
+        };
+      }),
+      ...THEMES.filter(t=>visibleThemes.has(t.id)).map(t=>({id:t.id,label:t.label,shape:'diamond',size:16,color:COLORS.theme.base,font:{color:'#fff'}}))
+    ]);
+    edges.add(
+      PAPERS.filter(p=>visiblePapers.includes(p.id)).flatMap(p=>(p.tags||[])
+        .map(tag=>tag2theme(tag)).filter(Boolean).filter(tid=>visibleThemes.has(tid))
+        .map(tid=>({from:p.id,to:tid,color:{color:COLORS.edges.base}})))
+    );
+    network.fit({animation:true});
+
+    // Filter table
+    table.clearFilter();
+    const tableFilters = [];
+    if(q){
+      const textFilters = [
+        "title","authors","venue","binder","activator","aggregate","sp","vma",
+        "other","yieldStress","viscosity","thixotropy","buildability","printer",
+        "path","extrusion","layering","objective","themes"
+      ].map(field=>({field, type:"like", value:q}));
+      tableFilters.push(textFilters);
+    }
+    if(th){ tableFilters.push({field:"themes", type:"like", value: th}); }
+    if(yrSel){ tableFilters.push({field:"year", type:"=", value: yrSel}); }
+
+    // slider-driven filters for table
+    tableFilters.push({field:"year", type:">=", value:r.y[0]});
+    tableFilters.push({field:"year", type:"<=", value:r.y[1]});
+    tableFilters.push({field:"wb", type:">=", value:r.wb[0]});
+    tableFilters.push({field:"wb", type:"<=", value:r.wb[1]});
+    tableFilters.push({field:"sb", type:">=", value:r.sb[0]});
+    tableFilters.push({field:"sb", type:"<=", value:r.sb[1]});
+    tableFilters.push({field:"fa", type:">=", value:r.fa[0]});
+    tableFilters.push({field:"fa", type:"<=", value:r.fa[1]});
+    tableFilters.push({field:"recycled", type:">=", value:r.rec[0]});
+    tableFilters.push({field:"recycled", type:"<=", value:r.rec[1]});
+    tableFilters.push({field:"strength", type:">=", value:r.f[0]});
+    tableFilters.push({field:"strength", type:"<=", value:r.f[1]});
+
+    if(tableFilters.length===1) table.setFilter(tableFilters[0]);
+    else if(tableFilters.length>1) table.setFilter(tableFilters);
+  }
+
+  document.getElementById('q').addEventListener('input', applyFilters);
+  document.getElementById('theme').addEventListener('change', applyFilters);
+  document.getElementById('year').addEventListener('change', applyFilters);
+  document.getElementById('reset').addEventListener('click', ()=>{
+    document.getElementById('q').value='';
+    document.getElementById('theme').value='';
+    document.getElementById('year').value='';
+    const defaults = {
+      wbMin:0.25, wbMax:0.50, sbMin:0.0, sbMax:3.0, faMin:0, faMax:80,
+      recMin:0, recMax:100, fMin:0, fMax:120, yMin:2017, yMax:2025
+    };
+    Object.entries(defaults).forEach(([k,v])=>{
+      document.getElementById(k).value = v;
+      document.getElementById(k+'Val') && (document.getElementById(k+'Val').textContent = v);
+    });
+    applyFilters();
+  });
+
+  document.getElementById('exportCSV').addEventListener('click', ()=>{
+    table.download("csv", "3dcp_literature.csv");
+  });
+
+  // initial render
+  applyFilters();
+  </script>
+</body>
+</html>
