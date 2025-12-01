@@ -30,8 +30,8 @@
     .pill { padding:4px 8px; border-radius:999px; border:1px solid #1f2937; background:#0b1327; }
     .pill.theme{ border-color:#334155; }
     .pill.paper{ border-color:#374151; }
-    .pill.proposed { border-color:#b91c1c; background:#2a1212; }
-    .pill.control { border-color:#16a34a; background:#0f2416; }
+    .pill.proposed { border-color:#e45252; background:#2a1212; }
+    .pill.control { border-color:#4eda81; background:#0f2416; }
     .note { color:#94a3b8; font-size:12px; margin-top:6px; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -39,6 +39,15 @@
     #table { height:60vh; }
     button { background:#0b1327; color:var(--fg); border:1px solid #1f2937; border-radius:8px; padding:8px 10px; cursor:pointer; }
     button:hover { border-color:#334155; }
+    .heat-legend { display:none; flex-direction:column; gap:6px; margin:8px 0 0; font-size:12px; color:#e5e7eb; }
+    .heat-legend.active { display:flex; }
+    .heat-legend .heat-title { font-weight:600; color:#cbd5e1; }
+    .heat-legend .heat-bar { display:flex; align-items:center; gap:8px; }
+    .heat-legend .heat-gradient { flex:1; height:10px; border-radius:999px; border:1px solid #1f2937;
+      background: linear-gradient(90deg,#22c55e 0%,#22c55e 25%,#a3e635 25%,#a3e635 50%,#f97316 50%,#f97316 75%,#ef4444 75%,#ef4444 100%);
+    }
+    .heat-legend .heat-min, .heat-legend .heat-max { width:70px; text-align:center; color:#cbd5e1; }
+    .heat-legend .heat-steps { color:#94a3b8; font-size:11px; }
   </style>
 </head>
 <body>
@@ -65,7 +74,20 @@
         </select>
         <button id="reset">Reset</button>
         <button id="exportCSV">Export CSV</button>
-        <div></div>
+        <div>
+          <select id="colorMode">
+            <option value="default">Color: type (default)</option>
+            <option value="wb">Color by w/b</option>
+            <option value="fa">% Fly Ash</option>
+            <option value="recycled">% Recycled agg.</option>
+            <option value="strength">f'c 28d (MPa)</option>
+            <option value="year">Year</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:4px;margin-top:6px;font-size:11px;color:#cbd5e1;">
+            <input type="checkbox" id="similarEdges" />
+            Similarity edges
+          </label>
+        </div>
       </div>
 
       <div class="filters">
@@ -88,6 +110,15 @@
         <span class="pill theme">Theme (purple diamond)</span>
         <span class="pill proposed">Proposed (red)</span>
         <span class="pill control">Control (green)</span>
+      </div>
+      <div class="heat-legend" id="heatLegend" aria-hidden="true">
+        <div class="heat-title" id="heatLegendTitle"></div>
+        <div class="heat-bar">
+          <span class="heat-min" id="heatLegendMin"></span>
+          <div class="heat-gradient"></div>
+          <span class="heat-max" id="heatLegendMax"></span>
+        </div>
+        <div class="heat-steps">Low → High (green → red)</div>
       </div>
       <div id="graph"></div>
       <div class="note">Tip: drag to pan, scroll to zoom, click a node to highlight connected items.</div>
@@ -486,79 +517,238 @@
     return COLORS.paper[state] || COLORS.paper.base;
   };
 
-  // ======== GRAPH ========
-  const nodes = new vis.DataSet([
-    // Paper nodes
-    ...PAPERS.map(p => ({
-      id: p.id,
-      label: mixLabel(p) + p.title,
-      shape: 'dot',
-      size: 10,
-      color: paperColor(p, 'base'),
-      title: `<b>${p.title}</b><br>${p.authors}<br><i>${p.venue||''}</i><br>${p.year}${p.doi?('<br>DOI: '+p.doi):''}${p.url?('<br><a href="'+p.url+'" target="_blank">Open</a>'):''}`
-    })),
-    // Theme nodes
-    ...THEMES.map(t => ({
-      id: t.id,
-      label: t.label,
-      shape: 'diamond',
-      size: 16,
-      color: COLORS.theme.base,
-      font: { color:'#fff' }
-    }))
-  ]);
+  const HEAT_LABELS = {
+    wb:'w/b',
+    sb:'S/B',
+    fa:'% Fly Ash',
+    recycled:'% Recycled agg.',
+    strength:"f'c 28d (MPa)",
+    year:'Year'
+  };
 
-  const edges = new vis.DataSet(
-    PAPERS.flatMap(p => (p.tags||[])
-      .map(tag => tag2theme(tag))
-      .filter(Boolean)
-      .map(tid => ({ from:p.id, to:tid, color:{color:COLORS.edges.base} })))
-  );
+  // ======== GRAPH v2 ========
 
-  const container = document.getElementById('graph');
-  const network = new vis.Network(container, {nodes, edges}, {
-    interaction: { hover:true, navigationButtons:true, keyboard:true },
-    physics: { solver:'forceAtlas2Based', stabilization:{iterations:150}, forceAtlas2Based:{gravitationalConstant:-50} },
-    edges: { smooth:true }
+  // Vis datasets
+  const nodes = new vis.DataSet();
+  const edges = new vis.DataSet();
+
+  // Color modes for heatmap
+  const METRIC_CONFIG = {
+    default: null,
+    wb:       { field: "wb",         min: 0.25, max: 0.50 },
+    sb:       { field: "sb",         min: 0.0,  max: 3.0  },
+    fa:       { field: "fa",         min: 0,    max: 80   },
+    recycled: { field: "recycled",   min: 0,    max: 100  },
+    strength: { field: "strength28", min: 0,    max: 120  },
+    year:     { field: "year",       min: 2017, max: 2025 }
+  };
+
+  let currentColorMode = "default";
+  let showSimilar = false;
+
+  // Precompute similarity edges between papers
+  const SIMILAR_EDGES = buildSimilarityEdges();
+
+  function closeNum(x, y, tol) {
+    if (x == null || y == null) return false;
+    return Math.abs(x - y) <= tol;
+  }
+
+  function similarityScore(a, b) {
+    let s = 0;
+    if (!a || !b) return 0;
+
+    // Binder text match
+    if (a.binder && b.binder && a.binder === b.binder) s += 0.25;
+
+    // Mix design closeness
+    if (closeNum(a.wb,        b.wb,        0.03)) s += 0.15;
+    if (closeNum(a.fa,        b.fa,        10))   s += 0.15;
+    if (closeNum(a.recycled,  b.recycled,  10))   s += 0.10;
+    if (closeNum(a.strength28,b.strength28,10))   s += 0.10;
+
+    // Tag overlap (shared themes)
+    const tagsA = a.tags || [];
+    const tagsB = b.tags || [];
+    const commonTags = tagsA.filter(t => tagsB.includes(t));
+    if (commonTags.length) s += 0.25;
+
+    return s;
+  }
+
+  function buildSimilarityEdges() {
+    const out = [];
+    for (let i = 0; i < PAPERS.length; i++) {
+      const a = PAPERS[i];
+      for (let j = i + 1; j < PAPERS.length; j++) {
+        const b = PAPERS[j];
+        const score = similarityScore(a, b);
+        if (score >= 0.55) {
+          out.push({ from: a.id, to: b.id, score });
+        }
+      }
+    }
+    return out;
+  }
+
+  // Get metric-based color for a paper (for heatmap)
+  function colorForMetric(paper) {
+    if (!paper || currentColorMode === "default" || !METRIC_CONFIG[currentColorMode]) {
+      return paperColor(paper, "base");
+    }
+    const cfg = METRIC_CONFIG[currentColorMode];
+    const raw = paper[cfg.field];
+
+    if (raw == null || isNaN(raw)) {
+      return paperColor(paper, "base");
+    }
+
+    const tRaw = (raw - cfg.min) / (cfg.max - cfg.min);
+    const t = Math.max(0, Math.min(1, tRaw));
+
+    if (t < 0.25) return "#22c55e";
+    if (t < 0.50) return "#a3e635";
+    if (t < 0.75) return "#f97316";
+    return "#ef4444";
+  }
+
+  function applyColorMode() {
+    const allNodes = nodes.get();
+    const themeIds = new Set(THEMES.map(t => t.id));
+
+    allNodes.forEach(n => {
+      if (themeIds.has(n.id)) {
+        nodes.update({ id: n.id, color: COLORS.theme.base });
+      } else {
+        const paper = PAPERS.find(p => p.id === n.id);
+        const color = colorForMetric(paper);
+        nodes.update({ id: n.id, color });
+      }
+    });
+
+    applyEdgeBaseColors();
+    updateHeatLegend();
+  }
+
+  function applyEdgeBaseColors() {
+    edges.get().forEach(e => {
+      edges.update({
+        id: e.id,
+        color: { color: e.baseColor || COLORS.edges.base }
+      });
+    });
+  }
+
+  // Build graph from visible data
+  const container = document.getElementById("graph");
+  const network = new vis.Network(container, { nodes, edges }, {
+    interaction: {
+      hover: true,
+      navigationButtons: true,
+      keyboard: true
+    },
+    physics: {
+      solver: "forceAtlas2Based",
+      stabilization: { iterations: 120 },
+      forceAtlas2Based: {
+        gravitationalConstant: -55,
+        springConstant: 0.06,
+        avoidOverlap: 1
+      }
+    },
+    edges: {
+      smooth: true
+    }
   });
 
-  // Highlight on click
-  network.on('click', params=>{
+  // Click highlight behaviour
+  network.on("click", params => {
     const selected = params.nodes[0];
-    if(!selected) {
-      nodes.get().forEach(n=>{
-        const paper = PAPERS.find(p=>p.id===n.id);
-        const color = n.shape==='diamond' ? COLORS.theme.base : paperColor(paper,'base');
-        nodes.update({id:n.id,color});
-      });
-      edges.get().forEach(e=>edges.update({id:e.id, color:{color:COLORS.edges.base}}));
+
+    if (!selected) {
+      applyColorMode();
+      applyEdgeBaseColors();
       return;
     }
-    const connected = network.getConnectedNodes(selected);
-    nodes.get().forEach(n=>{
-      const isFocus = (n.id===selected) || connected.includes(n.id);
-      const paper = PAPERS.find(p=>p.id===n.id);
-      const color = n.shape==='diamond'
-        ? (isFocus ? COLORS.theme.focus : COLORS.theme.dim)
-        : paperColor(paper, isFocus ? 'focus' : 'dim');
-      nodes.update({id:n.id, color});
+
+    const neighbours = network.getConnectedNodes(selected);
+    const focusSet = new Set([selected, ...neighbours]);
+
+    nodes.get().forEach(n => {
+      const isActive = focusSet.has(n.id);
+      const paper = PAPERS.find(p => p.id === n.id);
+      let color;
+
+      if (isActive) {
+        if (THEMES.some(t => t.id === n.id)) {
+          color = COLORS.theme.focus;
+        } else if (paper && (paper.tags || []).includes("Proposed mix")) {
+          color = COLORS.proposed.focus.background;
+        } else if (paper && (paper.tags || []).includes("Control")) {
+          color = COLORS.control.focus.background;
+        } else {
+          color = "#e5e7eb";
+        }
+      } else {
+        color = "#111827";
+      }
+
+      nodes.update({ id: n.id, color });
     });
-    edges.get().forEach(e=>{
-      const onPath = (e.from===selected || e.to===selected || (connected.includes(e.from) && connected.includes(e.to)));
-      edges.update({id:e.id, color:{color: onPath ? COLORS.edges.focus : COLORS.edges.dim}});
+
+    edges.get().forEach(e => {
+      const isOnPath = focusSet.has(e.from) && focusSet.has(e.to);
+      edges.update({
+        id: e.id,
+        color: { color: isOnPath ? COLORS.edges.focus : "#1f2937" }
+      });
     });
   });
 
-  // ======== TABLE ========
-  const tableData = PAPERS.map(p=>({
-    mix: p.mix ? (typeof p.mix === 'number' ? `Mix ${p.mix}` : p.mix) : '-',
-    year: p.year, title: p.title, authors: p.authors, venue: p.venue,
-    doi: p.doi, url: p.url, themes: (p.tags||[]).join(', '),
-    wb:p.wb, sb:p.sb, fa:p.fa, recycled:p.recycled, strength:p.strength28,
-    binder:p.binder, activator:p.activator, aggregate:p.aggregate, sp:p.sp, vma:p.vma,
-    other:p.other, yieldStress:p.yieldStress, viscosity:p.viscosity, thixotropy:p.thixotropy,
-    buildability:p.buildability, printer:p.printer, path:p.path, extrusion:p.extrusion,
-    layering:p.layering, objective:p.objective
+  // Double-click paper node → open URL/DOI if available
+  network.on("doubleClick", params => {
+    const id = params.nodes[0];
+    if (!id) return;
+    const paper = PAPERS.find(p => p.id === id);
+    if (!paper) return;
+    if (paper.url) {
+      window.open(paper.url, "_blank");
+    } else if (paper.doi) {
+      window.open("https://doi.org/" + paper.doi, "_blank");
+    }
+  });
+
+  // ======== TABLE (unchanged structure, reused data) ========
+
+  const tableData = PAPERS.map(p => ({
+    mix: p.mix ? (typeof p.mix === "number" ? `Mix ${p.mix}` : p.mix) : "-",
+    year: p.year,
+    title: p.title,
+    authors: p.authors,
+    venue: p.venue,
+    doi: p.doi,
+    url: p.url,
+    themes: (p.tags || []).join(", "),
+    wb: p.wb,
+    sb: p.sb,
+    fa: p.fa,
+    recycled: p.recycled,
+    strength: p.strength28,
+    binder: p.binder,
+    activator: p.activator,
+    aggregate: p.aggregate,
+    sp: p.sp,
+    vma: p.vma,
+    other: p.other,
+    yieldStress: p.yieldStress,
+    viscosity: p.viscosity,
+    thixotropy: p.thixotropy,
+    buildability: p.buildability,
+    printer: p.printer,
+    path: p.path,
+    extrusion: p.extrusion,
+    layering: p.layering,
+    objective: p.objective
   }));
 
   const table = new Tabulator("#table", {
@@ -567,47 +757,67 @@
     reactiveData: true,
     height: "60vh",
     columns: [
-      {title:"Mix", field:"mix", width:130, headerFilter:true},
-      {title:"Year", field:"year", sorter:"number", width:80, headerFilter:true},
-      {title:"Title", field:"title", headerFilter:true, formatter:(cell)=> {
-        const row = cell.getRow().getData();
-        return row.url ? `<a href="${row.url}" target="_blank">${cell.getValue()}</a>` : cell.getValue();
-      }},
-      {title:"Authors", field:"authors", headerFilter:true},
-      {title:"Venue", field:"venue", headerFilter:true},
-      {title:"DOI", field:"doi", headerFilter:true, formatter:(cell)=>{
-        const v = cell.getValue(); if(!v) return '';
-        return `<a href="https://doi.org/${v}" target="_blank">${v}</a>`;
-      }},
-      {title:"Binder", field:"binder", headerFilter:true, width:220},
-      {title:"Activator", field:"activator", headerFilter:true, width:150},
-      {title:"Aggregate", field:"aggregate", headerFilter:true, width:240},
-      {title:"Superplasticiser", field:"sp", headerFilter:true, width:220},
-      {title:"Rheology modifier", field:"vma", headerFilter:true, width:220},
-      {title:"Other additives", field:"other", headerFilter:true, width:200},
-      {title:"Yield stress", field:"yieldStress", headerFilter:true, width:160},
-      {title:"Apparent viscosity", field:"viscosity", headerFilter:true, width:160},
-      {title:"Thixotropy", field:"thixotropy", headerFilter:true, width:150},
-      {title:"Buildability", field:"buildability", headerFilter:true, width:220},
-      {title:"Printer setup", field:"printer", headerFilter:true, width:240},
-      {title:"Printing path / geometry", field:"path", headerFilter:true, width:220},
-      {title:"Extrusion system", field:"extrusion", headerFilter:true, width:200},
-      {title:"Layer height / speed", field:"layering", headerFilter:true, width:180},
-      {title:"Objective / focus", field:"objective", headerFilter:true, width:260},
-      {title:"w/b", field:"wb", sorter:"number", width:80},
-      {title:"S/B", field:"sb", sorter:"number", width:80},
-      {title:"%FA", field:"fa", sorter:"number", width:80},
-      {title:"%Recycled", field:"recycled", sorter:"number", width:110},
-      {title:"f'c 28d (MPa)", field:"strength", sorter:"number", width:120}
+      { title: "Mix", field: "mix", width: 130, headerFilter: true },
+      { title: "Year", field: "year", sorter: "number", width: 80, headerFilter: true },
+      {
+        title: "Title",
+        field: "title",
+        headerFilter: true,
+        formatter: cell => {
+          const row = cell.getRow().getData();
+          return row.url
+            ? `<a href="${row.url}" target="_blank">${cell.getValue()}</a>`
+            : cell.getValue();
+        }
+      },
+      { title: "Authors", field: "authors", headerFilter: true },
+      { title: "Venue", field: "venue", headerFilter: true },
+      {
+        title: "DOI",
+        field: "doi",
+        headerFilter: true,
+        formatter: cell => {
+          const v = cell.getValue();
+          if (!v) return "";
+          return `<a href="https://doi.org/${v}" target="_blank">${v}</a>`;
+        }
+      },
+      { title: "Binder", field: "binder", headerFilter: true, width: 220 },
+      { title: "Activator", field: "activator", headerFilter: true, width: 150 },
+      { title: "Aggregate", field: "aggregate", headerFilter: true, width: 240 },
+      { title: "Superplasticiser", field: "sp", headerFilter: true, width: 220 },
+      { title: "Rheology modifier", field: "vma", headerFilter: true, width: 220 },
+      { title: "Other additives", field: "other", headerFilter: true, width: 200 },
+      { title: "Yield stress", field: "yieldStress", headerFilter: true, width: 160 },
+      { title: "Apparent viscosity", field: "viscosity", headerFilter: true, width: 160 },
+      { title: "Thixotropy", field: "thixotropy", headerFilter: true, width: 150 },
+      { title: "Buildability", field: "buildability", headerFilter: true, width: 220 },
+      { title: "Printer setup", field: "printer", headerFilter: true, width: 240 },
+      { title: "Printing path / geometry", field: "path", headerFilter: true, width: 220 },
+      { title: "Extrusion system", field: "extrusion", headerFilter: true, width: 200 },
+      { title: "Layer height / speed", field: "layering", headerFilter: true, width: 180 },
+      { title: "Objective / focus", field: "objective", headerFilter: true, width: 260 },
+      { title: "w/b", field: "wb", sorter: "number", width: 80 },
+      { title: "S/B", field: "sb", sorter: "number", width: 80 },
+      { title: "%FA", field: "fa", sorter: "number", width: 80 },
+      { title: "%Recycled", field: "recycled", sorter: "number", width: 110 },
+      { title: "f'c 28d (MPa)", field: "strength", sorter: "number", width: 120 }
     ]
   });
 
-  // ======== FILTERS ========
-  const $q = document.getElementById('q');
-  const $theme = document.getElementById('theme');
-  const $year = document.getElementById('year');
-  const $reset = document.getElementById('reset');
-  const $exportCSV = document.getElementById('exportCSV');
+  // ======== FILTERS & CONTROLS v2 ========
+
+  const $q = document.getElementById("q");
+  const $theme = document.getElementById("theme");
+  const $year = document.getElementById("year");
+  const $reset = document.getElementById("reset");
+  const $exportCSV = document.getElementById("exportCSV");
+  const $colorMode = document.getElementById("colorMode");
+  const $simEdges = document.getElementById("similarEdges");
+  const $heatLegend = document.getElementById("heatLegend");
+  const $heatLegendTitle = document.getElementById("heatLegendTitle");
+  const $heatLegendMin = document.getElementById("heatLegendMin");
+  const $heatLegendMax = document.getElementById("heatLegendMax");
 
   const sliders = {
     wbMin:  document.getElementById('wbMin'),  wbMinVal:  document.getElementById('wbMinVal'),
@@ -624,129 +834,237 @@
     yMax:   document.getElementById('yMax'),   yMaxVal:   document.getElementById('yMaxVal'),
   };
 
-  Object.keys(sliders).forEach(k=>{
-    if(k.endsWith('Val')) return;
-    sliders[k].addEventListener('input', ()=>{
-      const labelKey = k+'Val';
+  Object.keys(sliders).forEach(k => {
+    if (k.endsWith("Val")) return;
+    sliders[k].addEventListener("input", () => {
+      const labelKey = k + "Val";
       sliders[labelKey].textContent = sliders[k].value;
       applyFilters();
     });
   });
 
-  function inRange(val, min, max){
-    if(val===null || val===undefined) return true; // treat missing as pass-through
-    return val>=min && val<=max;
+  function inRange(val, min, max) {
+    if (val === null || val === undefined) return true;
+    return val >= min && val <= max;
   }
 
-  function applyFilters(){
+  function applyFilters(refit = true) {
     const q = $q.value.trim().toLowerCase();
     const th = $theme.value;
-    const yrSel = $year.value ? parseInt($year.value,10) : null;
+    const yrSel = $year.value ? parseInt($year.value, 10) : null;
 
-    // Slider ranges
     const r = {
-      wb:[parseFloat(sliders.wbMin.value), parseFloat(sliders.wbMax.value)],
-      sb:[parseFloat(sliders.sbMin.value), parseFloat(sliders.sbMax.value)],
-      fa:[parseInt(sliders.faMin.value,10), parseInt(sliders.faMax.value,10)],
-      rec:[parseInt(sliders.recMin.value,10), parseInt(sliders.recMax.value,10)],
-      f:[parseInt(sliders.fMin.value,10), parseInt(sliders.fMax.value,10)],
-      y:[parseInt(sliders.yMin.value,10), parseInt(sliders.yMax.value,10)]
+      wb:  [parseFloat(sliders.wbMin.value), parseFloat(sliders.wbMax.value)],
+      sb:  [parseFloat(sliders.sbMin.value), parseFloat(sliders.sbMax.value)],
+      fa:  [parseInt(sliders.faMin.value, 10), parseInt(sliders.faMax.value, 10)],
+      rec: [parseInt(sliders.recMin.value, 10), parseInt(sliders.recMax.value, 10)],
+      f:   [parseInt(sliders.fMin.value, 10),  parseInt(sliders.fMax.value, 10)],
+      y:   [parseInt(sliders.yMin.value, 10),  parseInt(sliders.yMax.value, 10)]
     };
 
-    // Filtered paper ids
-    const visiblePapers = PAPERS.filter(p=>{
-      const okQ = !q || (p.title.toLowerCase().includes(q) || (p.authors||'').toLowerCase().includes(q) || (p.venue||'').toLowerCase().includes(q));
-      const okT = !th || (p.tags||[]).includes(th);
-      const okYsel = !yrSel || p.year===yrSel;
+    const visiblePapers = PAPERS.filter(p => {
+      const okQ = !q || (
+        p.title.toLowerCase().includes(q) ||
+        (p.authors || "").toLowerCase().includes(q) ||
+        (p.venue || "").toLowerCase().includes(q)
+      );
+      const okT = !th || (p.tags || []).includes(th);
+      const okYsel = !yrSel || p.year === yrSel;
       const okYr = inRange(p.year, r.y[0], r.y[1]);
       const okWB = inRange(p.wb, r.wb[0], r.wb[1]);
       const okSB = inRange(p.sb, r.sb[0], r.sb[1]);
       const okFA = inRange(p.fa, r.fa[0], r.fa[1]);
       const okRC = inRange(p.recycled, r.rec[0], r.rec[1]);
       const okF  = inRange(p.strength28, r.f[0], r.f[1]);
-      return okQ && okT && okYsel && okYr && okWB && okSB && okFA && okRC && okF;
-    }).map(p=>p.id);
 
-    // Visible themes
-    const visibleThemes = new Set();
-    visiblePapers.forEach(pid=>{
-      const paper = PAPERS.find(pp=>pp.id===pid);
-      (paper.tags||[]).forEach(t=>{ const tid = tag2theme(t); if(tid) visibleThemes.add(tid); });
+      return okQ && okT && okYsel && okYr && okWB && okSB && okFA && okRC && okF;
     });
 
-    // Rebuild datasets
-    nodes.clear(); edges.clear();
-    nodes.add([
-      ...PAPERS.filter(p=>visiblePapers.includes(p.id)).map(p=>{
-        return {
-          id:p.id, label:mixLabel(p)+p.title, shape:'dot', size:10, color:paperColor(p,'base'),
-          title:`<b>${p.title}</b><br>${p.authors}<br><i>${p.venue||''}</i><br>${p.year}${p.doi?('<br>DOI: '+p.doi):''}${p.url?('<br><a href="${p.url}" target="_blank">Open</a>'):''}`
-        };
-      }),
-      ...THEMES.filter(t=>visibleThemes.has(t.id)).map(t=>({id:t.id,label:t.label,shape:'diamond',size:16,color:COLORS.theme.base,font:{color:'#fff'}}))
-    ]);
-    edges.add(
-      PAPERS.filter(p=>visiblePapers.includes(p.id)).flatMap(p=>(p.tags||[])
-        .map(tag=>tag2theme(tag)).filter(Boolean).filter(tid=>visibleThemes.has(tid))
-        .map(tid=>({from:p.id,to:tid,color:{color:COLORS.edges.base}})))
-    );
-    network.fit({animation:true});
+    const visibleIds = new Set(visiblePapers.map(p => p.id));
 
-    // Filter table
+    const visibleThemes = new Set();
+    visiblePapers.forEach(p => {
+      (p.tags || []).forEach(t => {
+        const tid = tag2theme(t);
+        if (tid) visibleThemes.add(tid);
+      });
+    });
+
+    nodes.clear();
+    edges.clear();
+
+    nodes.add(
+      visiblePapers.map(p => ({
+        id: p.id,
+        label: mixLabel(p) + p.title,
+        shape: "dot",
+        size: 10,
+        color: paperColor(p, "base"),
+        title: `<b>${p.title}</b><br>${p.authors}<br><i>${p.venue || ""}</i><br>${p.year || ""}` +
+          (p.doi ? `<br>DOI: ${p.doi}` : "") +
+          (p.url ? `<br><a href="${p.url}" target="_blank">Open</a>` : "")
+      }))
+    );
+
+    nodes.add(
+      THEMES.filter(t => visibleThemes.has(t.id)).map(t => ({
+        id: t.id,
+        label: t.label,
+        shape: "diamond",
+        size: 16,
+        color: COLORS.theme.base,
+        font: { color: "#fff" }
+      }))
+    );
+
+    const themeEdges = visiblePapers.flatMap(p =>
+      (p.tags || [])
+        .map(tag => tag2theme(tag))
+        .filter(Boolean)
+        .filter(tid => visibleThemes.has(tid))
+        .map(tid => ({
+          from: p.id,
+          to: tid,
+          color: { color: COLORS.edges.base },
+          edgeType: "theme",
+          baseColor: COLORS.edges.base
+        }))
+    );
+    edges.add(themeEdges);
+
+    if (showSimilar) {
+      SIMILAR_EDGES.forEach(e => {
+        if (visibleIds.has(e.from) && visibleIds.has(e.to)) {
+          const w = e.score;
+          const baseColor = "#64748b";
+          edges.add({
+            from: e.from,
+            to: e.to,
+            width: 1 + 2 * w,
+            dashes: true,
+            color: { color: baseColor },
+            edgeType: "similarity",
+            baseColor
+          });
+        }
+      });
+    }
+
+    if (refit) {
+      network.fit({ animation: true });
+    }
+
+    applyColorMode();
+
     table.clearFilter();
+
     const tableFilters = [];
-    if(q){
-      const textFilters = [
+
+    if (q) {
+      const textFields = [
         "title","authors","venue","binder","activator","aggregate","sp","vma",
         "other","yieldStress","viscosity","thixotropy","buildability","printer",
         "path","extrusion","layering","objective","themes"
-      ].map(field=>({field, type:"like", value:q}));
-      tableFilters.push(textFilters);
+      ];
+      const subFilters = textFields.map(field => ({
+        field,
+        type: "like",
+        value: q
+      }));
+      tableFilters.push(subFilters);
     }
-    if(th){ tableFilters.push({field:"themes", type:"like", value: th}); }
-    if(yrSel){ tableFilters.push({field:"year", type:"=", value: yrSel}); }
 
-    // slider-driven filters for table
-    tableFilters.push({field:"year", type:">=", value:r.y[0]});
-    tableFilters.push({field:"year", type:"<=", value:r.y[1]});
-    tableFilters.push({field:"wb", type:">=", value:r.wb[0]});
-    tableFilters.push({field:"wb", type:"<=", value:r.wb[1]});
-    tableFilters.push({field:"sb", type:">=", value:r.sb[0]});
-    tableFilters.push({field:"sb", type:"<=", value:r.sb[1]});
-    tableFilters.push({field:"fa", type:">=", value:r.fa[0]});
-    tableFilters.push({field:"fa", type:"<=", value:r.fa[1]});
-    tableFilters.push({field:"recycled", type:">=", value:r.rec[0]});
-    tableFilters.push({field:"recycled", type:"<=", value:r.rec[1]});
-    tableFilters.push({field:"strength", type:">=", value:r.f[0]});
-    tableFilters.push({field:"strength", type:"<=", value:r.f[1]});
+    if (th) {
+      tableFilters.push({ field: "themes", type: "like", value: th });
+    }
+    if (yrSel) {
+      tableFilters.push({ field: "year", type: "=", value: yrSel });
+    }
 
-    if(tableFilters.length===1) table.setFilter(tableFilters[0]);
-    else if(tableFilters.length>1) table.setFilter(tableFilters);
+    tableFilters.push({ field: "year", type: ">=", value: r.y[0] });
+    tableFilters.push({ field: "year", type: "<=", value: r.y[1] });
+    tableFilters.push({ field: "wb",   type: ">=", value: r.wb[0] });
+    tableFilters.push({ field: "wb",   type: "<=", value: r.wb[1] });
+    tableFilters.push({ field: "sb",   type: ">=", value: r.sb[0] });
+    tableFilters.push({ field: "sb",   type: "<=", value: r.sb[1] });
+    tableFilters.push({ field: "fa",   type: ">=", value: r.fa[0] });
+    tableFilters.push({ field: "fa",   type: "<=", value: r.fa[1] });
+    tableFilters.push({ field: "recycled", type: ">=", value: r.rec[0] });
+    tableFilters.push({ field: "recycled", type: "<=", value: r.rec[1] });
+    tableFilters.push({ field: "strength", type: ">=", value: r.f[0] });
+    tableFilters.push({ field: "strength", type: "<=", value: r.f[1] });
+
+    if (tableFilters.length === 1) {
+      table.setFilter(tableFilters[0]);
+    } else if (tableFilters.length > 1) {
+      table.setFilter(tableFilters);
+    }
   }
 
-  document.getElementById('q').addEventListener('input', applyFilters);
-  document.getElementById('theme').addEventListener('change', applyFilters);
-  document.getElementById('year').addEventListener('change', applyFilters);
-  document.getElementById('reset').addEventListener('click', ()=>{
-    document.getElementById('q').value='';
-    document.getElementById('theme').value='';
-    document.getElementById('year').value='';
+  function updateHeatLegend() {
+    if (!$heatLegend) return;
+    const mode = currentColorMode;
+    if (mode === "default" || !METRIC_CONFIG[mode]) {
+      $heatLegend.classList.remove("active");
+      $heatLegend.setAttribute("aria-hidden","true");
+      return;
+    }
+    const cfg = METRIC_CONFIG[mode];
+    const title = HEAT_LABELS[mode] || mode;
+    $heatLegendTitle.textContent = `Heatmap: ${title}`;
+    $heatLegendMin.textContent = cfg.min;
+    $heatLegendMax.textContent = cfg.max;
+    $heatLegend.classList.add("active");
+    $heatLegend.setAttribute("aria-hidden","false");
+  }
+
+  $q.addEventListener("input", () => applyFilters());
+  $theme.addEventListener("change", () => applyFilters());
+  $year.addEventListener("change", () => applyFilters());
+
+  $colorMode.addEventListener("change", () => {
+    currentColorMode = $colorMode.value || "default";
+    applyColorMode();
+  });
+
+  $simEdges.addEventListener("change", () => {
+    showSimilar = $simEdges.checked;
+    applyFilters(false);
+  });
+
+  $reset.addEventListener("click", () => {
+    $q.value = "";
+    $theme.value = "";
+    $year.value = "";
+    $colorMode.value = "default";
+    $simEdges.checked = false;
+    currentColorMode = "default";
+    showSimilar = false;
+
     const defaults = {
-      wbMin:0.25, wbMax:0.50, sbMin:0.0, sbMax:3.0, faMin:0, faMax:80,
-      recMin:0, recMax:100, fMin:0, fMax:120, yMin:2017, yMax:2025
+      wbMin: 0.25, wbMax: 0.50,
+      sbMin: 0.0,  sbMax: 3.0,
+      faMin: 0,    faMax: 80,
+      recMin: 0,   recMax: 100,
+      fMin: 0,     fMax: 120,
+      yMin: 2017,  yMax: 2025
     };
-    Object.entries(defaults).forEach(([k,v])=>{
-      document.getElementById(k).value = v;
-      document.getElementById(k+'Val') && (document.getElementById(k+'Val').textContent = v);
+    Object.entries(defaults).forEach(([k, v]) => {
+      const el = document.getElementById(k);
+      const lab = document.getElementById(k + "Val");
+      if (el) el.value = v;
+      if (lab) lab.textContent = v;
     });
+
     applyFilters();
   });
 
-  document.getElementById('exportCSV').addEventListener('click', ()=>{
+  $exportCSV.addEventListener("click", () => {
     table.download("csv", "3dcp_literature.csv");
   });
 
-  // initial render
+  // Initial draw
+  updateHeatLegend();
   applyFilters();
   </script>
 </body>
